@@ -27,7 +27,7 @@ class Document(Base):
     source = Column(String, unique=True, nullable=False, index=True)
     checksum = Column(String, nullable=False)
     chunk_count = Column(Integer, nullable=False)
-    metadata = Column(Text)  # JSON string
+    doc_metadata = Column(Text)  # JSON string (renamed from metadata to avoid SQLAlchemy conflict)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -86,7 +86,7 @@ class SQLiteDocStore:
             # Update existing
             existing.checksum = checksum
             existing.chunk_count = chunk_count
-            existing.metadata = json.dumps(metadata or {})
+            existing.doc_metadata = json.dumps(metadata or {})
             existing.updated_at = datetime.utcnow()
             self.session.commit()
             logger.info(f"Updated document: {source}")
@@ -98,7 +98,7 @@ class SQLiteDocStore:
                 source=source,
                 checksum=checksum,
                 chunk_count=chunk_count,
-                metadata=json.dumps(metadata or {}),
+                doc_metadata=json.dumps(metadata or {}),
             )
             self.session.add(doc)
             self.session.commit()
@@ -122,7 +122,7 @@ class SQLiteDocStore:
                 "source": doc.source,
                 "checksum": doc.checksum,
                 "chunk_count": doc.chunk_count,
-                "metadata": json.loads(doc.metadata) if doc.metadata else {},
+                "metadata": json.loads(doc.doc_metadata) if doc.doc_metadata else {},
                 "created_at": doc.created_at.isoformat(),
                 "updated_at": doc.updated_at.isoformat(),
             }
@@ -173,7 +173,7 @@ class SQLiteDocStore:
                 "source": doc.source,
                 "checksum": doc.checksum,
                 "chunk_count": doc.chunk_count,
-                "metadata": json.loads(doc.metadata) if doc.metadata else {},
+                "metadata": json.loads(doc.doc_metadata) if doc.doc_metadata else {},
                 "created_at": doc.created_at.isoformat(),
                 "updated_at": doc.updated_at.isoformat(),
             }
