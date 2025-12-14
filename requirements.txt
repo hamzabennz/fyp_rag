@@ -1,0 +1,22 @@
+# Core dependencies
+chonkie>=0.1.0
+sentence-transformers>=2.2.0
+
+# Embedding models (will be auto-downloaded)
+torch>=2.0.0
+transformers>=4.30.0
+
+# Utilities
+numpy>=1.24.0
+tqdm>=4.65.0
+
+# Development
+pytest>=7.0.0
+pytest-cov>=4.0.0
+black>=23.0.0
+flake8>=6.0.0
+mypy>=1.0.0
+
+# Documentation
+sphinx>=5.0.0
+sphinx-rtd-theme>=1.2.0
