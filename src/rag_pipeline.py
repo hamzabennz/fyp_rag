@@ -59,11 +59,10 @@ class RAGPipeline:
         # Initialize chunkers based on strategy
         if chunking_strategy in (ChunkingStrategy.SEMANTIC, ChunkingStrategy.HYBRID):
             self.semantic_chunker = SemanticChunker(
-                model_name=semantic_model,
-                similarity_threshold=semantic_threshold,
+                embedding_model=semantic_model,
+                threshold=semantic_threshold,
                 chunk_size=semantic_chunk_size,
                 similarity_window=semantic_window,
-                device=device,
             )
         else:
             self.semantic_chunker = None
