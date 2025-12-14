@@ -12,6 +12,8 @@ import logging
 from .semantic_chunker import SemanticChunker
 from .layout_chunker import LayoutChunker
 from .retriever import EmbeddingRetriever
+from .vector_store import ChromaVectorStore
+from .doc_store import SQLiteDocStore
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,9 @@ class RAGPipeline:
         layout_min_words: int = 30,
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = "cpu",
+        use_persistent_storage: bool = False,
+        chroma_persist_dir: str = "./data/chroma",
+        sqlite_db_url: str = "sqlite:///./data/rag_docs.db",
     ):
         """
         Initialize the RAG pipeline.
@@ -75,6 +80,20 @@ class RAGPipeline:
         # Initialize retriever
         self.retriever = EmbeddingRetriever(model_name=embedding_model, device=device)
 
+        # Initialize persistent storage (optional)
+        self.use_persistent_storage = use_persistent_storage
+        if use_persistent_storage:
+            self.vector_store = ChromaVectorStore(
+                collection_name="rag_chunks",
+                persist_directory=chroma_persist_dir,
+            )
+            self.doc_store = SQLiteDocStore(db_url=sqlite_db_url)
+            logger.info("Persistent storage enabled (Chroma + SQLite)")
+        else:
+            self.vector_store = None
+            self.doc_store = None
+            logger.info("Using in-memory storage only")
+
         # Store processed documents
         self.documents = {}  # source -> document content
         self.processed_chunks = []  # all chunks across documents
@@ -104,6 +123,13 @@ class RAGPipeline:
             logger.warning(f"Empty content for document: {source}")
             return 0
 
+        # Check if document has changed (for persistent storage)
+        if self.use_persistent_storage:
+            if self.doc_store.exists(source) and not self.doc_store.has_changed(source, content):
+                logger.info(f"Document '{source}' unchanged, skipping")
+                doc = self.doc_store.get_document(source)
+                return doc["chunk_count"]
+
         # Store document
         self.documents[source] = {
             "content": content,
@@ -113,9 +139,25 @@ class RAGPipeline:
         # Chunk document based on strategy
         chunks = self._chunk_document(content, source)
 
-        # Add chunks to retriever
+        # Add chunks to retriever (in-memory)
         self.retriever.add_chunks(chunks)
         self.processed_chunks.extend(chunks)
+
+        # Add to persistent storage if enabled
+        if self.use_persistent_storage:
+            # Get embeddings from retriever
+            embeddings = self.retriever.chunk_embeddings[-len(chunks):]
+            
+            # Store in vector DB
+            self.vector_store.add_chunks(chunks, embeddings)
+            
+            # Store metadata in doc DB
+            self.doc_store.add_document(
+                source=source,
+                content=content,
+                chunk_count=len(chunks),
+                metadata=metadata,
+            )
 
         logger.info(f"Added document '{source}' with {len(chunks)} chunks")
         return len(chunks)
@@ -199,6 +241,40 @@ class RAGPipeline:
                 }
                 for chunk, score in raw_results
             ]
+
+        return results
+
+    def retrieve_persistent(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_source: str = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve from persistent storage (ChromaDB).
+
+        Args:
+            query: Query text
+            top_k: Number of results
+            filter_source: Optional source filter
+
+        Returns:
+            List of result dictionaries
+        """
+        if not self.use_persistent_storage:
+            logger.warning("Persistent storage not enabled")
+            return []
+
+        # Generate query embedding
+        query_embedding = self.retriever.model.encode([query], convert_to_numpy=True)[0].tolist()
+
+        # Search vector store
+        filter_dict = {"source": filter_source} if filter_source else None
+        results = self.vector_store.search(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            filter_dict=filter_dict,
+        )
 
         return results
 

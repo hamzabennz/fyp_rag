@@ -9,6 +9,10 @@ from typing import Optional
 # Device selection
 DEVICE = os.getenv("RAG_DEVICE", "cpu")  # 'cpu', 'cuda', 'mps'
 
+# Persistent Storage Configuration
+CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma")
+DOC_DB_URL = os.getenv("DOC_DB_URL", "sqlite:///./data/rag_docs.db")
+
 # Semantic Chunking Configuration
 SEMANTIC_CONFIG = {
     "embedding_model": "minishlab/potion-base-8M",
@@ -65,6 +69,11 @@ class RAGConfig:
 
     # Device
     device: str = "cpu"
+
+    # Persistent Storage
+    use_persistent_storage: bool = False
+    chroma_persist_dir: str = "./data/chroma"
+    doc_db_url: str = "sqlite:///./data/rag_docs.db"
 
     # Logging
     log_level: str = "INFO"
