@@ -38,6 +38,7 @@ class RAGPipeline:
         semantic_threshold: float = 0.75,
         semantic_chunk_size: int = 1536,
         semantic_window: int = 3,
+        semantic_min_sentences: int = 2,
         layout_min_words: int = 30,
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = "cpu",
@@ -54,6 +55,7 @@ class RAGPipeline:
             semantic_threshold: Similarity threshold for semantic chunking
             semantic_chunk_size: Chunk size for semantic chunking (tokens)
             semantic_window: Similarity window for semantic chunking (sentences)
+            semantic_min_sentences: Minimum sentences per chunk (prevents single-sentence chunks)
             layout_min_words: Minimum words for layout chunking
             embedding_model: Model for embedding generation
             device: Device to run models on ('cpu', 'cuda', 'mps')
@@ -68,6 +70,7 @@ class RAGPipeline:
                 threshold=semantic_threshold,
                 chunk_size=semantic_chunk_size,
                 similarity_window=semantic_window,
+                min_sentences_per_chunk=semantic_min_sentences,
             )
         else:
             self.semantic_chunker = None

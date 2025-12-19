@@ -138,3 +138,6 @@ data/documents/
 embeddings/
 *.pkl
 *.json
+pdf_to_txt.py
+.gitignore
+preprocess_textbook.py

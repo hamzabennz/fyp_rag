@@ -16,14 +16,15 @@ DOC_DB_URL = os.getenv("DOC_DB_URL", "sqlite:///./data/rag_docs.db")
 # Semantic Chunking Configuration
 SEMANTIC_CONFIG = {
     "embedding_model": "minishlab/potion-base-8M",
-    "threshold": 0.75,
-    "chunk_size": 1536,  # tokens
+    "threshold": 0.4,
+    "chunk_size": 3072,  # tokens
+    "min_sentences_per_chunk": 2,  # Minimum sentences per chunk (prevents single-sentence chunks)
     "tokenizer": "gpt2",
 }
 
 # Layout Chunking Configuration
 LAYOUT_CONFIG = {
-    "min_chunk_length": 30,  # words
+    "min_chunk_length": 120,  # words
 }
 
 # Embedding Configuration
@@ -57,6 +58,7 @@ class RAGConfig:
     semantic_embedding_model: str = "minishlab/potion-base-8M"
     semantic_threshold: float = 0.75
     semantic_chunk_size: int = 1536
+    semantic_min_sentences: int = 2
     semantic_tokenizer: str = "gpt2"
     layout_min_words: int = 30
 
@@ -85,6 +87,7 @@ class RAGConfig:
             "semantic_embedding_model": self.semantic_embedding_model,
             "semantic_threshold": self.semantic_threshold,
             "semantic_chunk_size": self.semantic_chunk_size,
+            "semantic_min_sentences": self.semantic_min_sentences,
             "semantic_tokenizer": self.semantic_tokenizer,
             "layout_min_words": self.layout_min_words,
             "embedding_model": self.embedding_model,

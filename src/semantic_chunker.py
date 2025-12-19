@@ -36,7 +36,7 @@ class SemanticChunker:
         threshold: float = 0.75,
         chunk_size: int = 1536,
         similarity_window: int = 3,
-        min_sentences_per_chunk: int = 1,
+        min_sentences_per_chunk: int = 2,
         min_characters_per_sentence: int = 24,
         delim: Optional[List[str]] = None,
         include_delim: Optional[Literal["prev", "next"]] = "prev",
