@@ -10,6 +10,9 @@ transformers>=4.30.0
 chromadb>=1.3.0
 sqlalchemy>=2.0.0
 
+# BM25 Keyword Search
+rank-bm25>=0.2.2
+
 # Web Service
 flask>=2.3.0
 

@@ -12,6 +12,8 @@ import logging
 from .semantic_chunker import SemanticChunker
 from .layout_chunker import LayoutChunker
 from .retriever import EmbeddingRetriever
+from .bm25_retriever import BM25Retriever
+from .hybrid_retriever import HybridRetriever
 from .vector_store import ChromaVectorStore
 from .doc_store import SQLiteDocStore
 
@@ -25,15 +27,26 @@ class ChunkingStrategy(Enum):
     HYBRID = "hybrid"
 
 
+class RetrievalMode(Enum):
+    """Retrieval mode options."""
+    SEMANTIC = "semantic"  # Vector embedding only
+    BM25 = "bm25"  # Keyword search only
+    HYBRID = "hybrid"  # Combined semantic + BM25
+
+
 class RAGPipeline:
     """
     Complete RAG pipeline combining chunking and retrieval.
-    Supports multiple chunking strategies and embedding-based retrieval.
+    Supports multiple chunking strategies and retrieval modes:
+    - Semantic (vector embedding)
+    - BM25 (keyword search)
+    - Hybrid (combined semantic + BM25)
     """
 
     def __init__(
         self,
         chunking_strategy: ChunkingStrategy = ChunkingStrategy.SEMANTIC,
+        retrieval_mode: RetrievalMode = RetrievalMode.HYBRID,
         semantic_model: str = "minishlab/potion-base-8M",
         semantic_threshold: float = 0.75,
         semantic_chunk_size: int = 1536,
@@ -42,6 +55,11 @@ class RAGPipeline:
         layout_min_words: int = 30,
         embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = "cpu",
+        bm25_k1: float = 1.5,
+        bm25_b: float = 0.75,
+        hybrid_semantic_weight: float = 0.5,
+        hybrid_bm25_weight: float = 0.5,
+        hybrid_fusion_method: str = "weighted",
         use_persistent_storage: bool = False,
         chroma_persist_dir: str = "./data/chroma",
         sqlite_db_url: str = "sqlite:///./data/rag_docs.db",
@@ -51,6 +69,7 @@ class RAGPipeline:
 
         Args:
             chunking_strategy: Which chunking strategy to use (SEMANTIC, LAYOUT, HYBRID)
+            retrieval_mode: Which retrieval mode to use (SEMANTIC, BM25, HYBRID)
             semantic_model: Model name for semantic chunking
             semantic_threshold: Similarity threshold for semantic chunking
             semantic_chunk_size: Chunk size for semantic chunking (tokens)
@@ -59,8 +78,17 @@ class RAGPipeline:
             layout_min_words: Minimum words for layout chunking
             embedding_model: Model for embedding generation
             device: Device to run models on ('cpu', 'cuda', 'mps')
+            bm25_k1: BM25 k1 parameter (term frequency saturation)
+            bm25_b: BM25 b parameter (length normalization)
+            hybrid_semantic_weight: Weight for semantic scores in hybrid mode
+            hybrid_bm25_weight: Weight for BM25 scores in hybrid mode
+            hybrid_fusion_method: Fusion method for hybrid mode ("weighted" or "rrf")
+            use_persistent_storage: Enable persistent storage (ChromaDB + SQLite)
+            chroma_persist_dir: Directory for ChromaDB persistent storage
+            sqlite_db_url: SQLite database URL for document metadata
         """
         self.chunking_strategy = chunking_strategy
+        self.retrieval_mode = retrieval_mode
         self.device = device
 
         # Initialize chunkers based on strategy
@@ -80,8 +108,35 @@ class RAGPipeline:
         else:
             self.layout_chunker = None
 
-        # Initialize retriever
-        self.retriever = EmbeddingRetriever(model_name=embedding_model, device=device)
+        # Initialize retriever(s) based on retrieval mode
+        if retrieval_mode == RetrievalMode.SEMANTIC:
+            self.retriever = EmbeddingRetriever(model_name=embedding_model, device=device)
+            self.bm25_retriever = None
+            self.hybrid_retriever = None
+            logger.info("Using SEMANTIC retrieval mode (vector embeddings only)")
+        
+        elif retrieval_mode == RetrievalMode.BM25:
+            self.retriever = None
+            self.bm25_retriever = BM25Retriever(k1=bm25_k1, b=bm25_b)
+            self.hybrid_retriever = None
+            logger.info("Using BM25 retrieval mode (keyword search only)")
+        
+        elif retrieval_mode == RetrievalMode.HYBRID:
+            self.retriever = None
+            self.bm25_retriever = None
+            self.hybrid_retriever = HybridRetriever(
+                embedding_model=embedding_model,
+                device=device,
+                bm25_k1=bm25_k1,
+                bm25_b=bm25_b,
+                semantic_weight=hybrid_semantic_weight,
+                bm25_weight=hybrid_bm25_weight,
+                fusion_method=hybrid_fusion_method,
+            )
+            logger.info(f"Using HYBRID retrieval mode (semantic + BM25, fusion={hybrid_fusion_method})")
+        
+        else:
+            raise ValueError(f"Unknown retrieval mode: {retrieval_mode}")
 
         # Initialize persistent storage (optional)
         self.use_persistent_storage = use_persistent_storage
@@ -102,7 +157,8 @@ class RAGPipeline:
         self.processed_chunks = []  # all chunks across documents
 
         logger.info(
-            f"RAGPipeline initialized with strategy={chunking_strategy.value}"
+            f"RAGPipeline initialized: chunking={chunking_strategy.value}, "
+            f"retrieval={retrieval_mode.value}"
         )
 
     def add_document(
@@ -147,17 +203,33 @@ class RAGPipeline:
         # Chunk document based on strategy
         chunks = self._chunk_document(content, source)
 
-        # Add chunks to retriever (in-memory)
-        self.retriever.add_chunks(chunks)
+        # Add chunks to retriever(s) (in-memory)
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            self.retriever.add_chunks(chunks)
+        elif self.retrieval_mode == RetrievalMode.BM25:
+            self.bm25_retriever.add_chunks(chunks)
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            self.hybrid_retriever.add_chunks(chunks)
+        
         self.processed_chunks.extend(chunks)
 
         # Add to persistent storage if enabled
         if self.use_persistent_storage:
-            # Get embeddings from retriever
-            embeddings = self.retriever.chunk_embeddings[-len(chunks):]
+            # Get embeddings (only if using semantic or hybrid mode)
+            if self.retrieval_mode == RetrievalMode.SEMANTIC:
+                embeddings = self.retriever.chunk_embeddings[-len(chunks):]
+            elif self.retrieval_mode == RetrievalMode.HYBRID:
+                embeddings = self.hybrid_retriever.embedding_retriever.chunk_embeddings[-len(chunks):]
+            else:
+                # For BM25-only mode, we still store embeddings if needed
+                # Create a temporary embedding retriever
+                from .retriever import EmbeddingRetriever
+                temp_retriever = EmbeddingRetriever(device=self.device)
+                temp_retriever.add_chunks(chunks)
+                embeddings = temp_retriever.chunk_embeddings
             
             # Store in vector DB
-            self.vector_store.add_chunks(chunks, embeddings)
+            self.vector_store.add_chunks(chunks, embeddings, resource_type=resource_type)
             
             # Store metadata in doc DB
             self.doc_store.add_document(
@@ -212,13 +284,13 @@ class RAGPipeline:
         context_window: int = 1,
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve relevant chunks for a query.
+        Retrieve relevant chunks for a query using the configured retrieval mode.
 
         Args:
             query: Query text
             top_k: Number of top results to return
-            similarity_threshold: Minimum similarity score (0-1)
-            include_context: Whether to include adjacent chunks as context
+            similarity_threshold: Minimum similarity score (0-1) for semantic/hybrid mode
+            include_context: Whether to include adjacent chunks as context (semantic mode only)
             context_window: Number of adjacent chunks to include
 
         Returns:
@@ -228,6 +300,27 @@ class RAGPipeline:
             logger.warning("No documents have been added to the pipeline")
             return []
 
+        # Route to appropriate retrieval method
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            return self._retrieve_semantic(
+                query, top_k, similarity_threshold, include_context, context_window
+            )
+        elif self.retrieval_mode == RetrievalMode.BM25:
+            return self._retrieve_bm25(query, top_k)
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            return self._retrieve_hybrid(query, top_k, similarity_threshold)
+        else:
+            raise ValueError(f"Unknown retrieval mode: {self.retrieval_mode}")
+
+    def _retrieve_semantic(
+        self,
+        query: str,
+        top_k: int = 5,
+        similarity_threshold: float = None,
+        include_context: bool = False,
+        context_window: int = 1,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve using semantic (embedding) search only."""
         if include_context:
             results = self.retriever.retrieve_with_context(
                 query=query,
@@ -245,10 +338,58 @@ class RAGPipeline:
                 {
                     "chunk": chunk,
                     "similarity_score": score,
+                    "retrieval_method": "semantic",
                     "context": [],
                 }
                 for chunk, score in raw_results
             ]
+
+        return results
+
+    def _retrieve_bm25(
+        self,
+        query: str,
+        top_k: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve using BM25 keyword search only."""
+        raw_results = self.bm25_retriever.retrieve(
+            query=query,
+            top_k=top_k,
+        )
+        results = [
+            {
+                "chunk": chunk,
+                "bm25_score": score,
+                "retrieval_method": "bm25",
+                "context": [],
+            }
+            for chunk, score in raw_results
+        ]
+
+        return results
+
+    def _retrieve_hybrid(
+        self,
+        query: str,
+        top_k: int = 5,
+        similarity_threshold: float = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve using hybrid search (semantic + BM25)."""
+        raw_results = self.hybrid_retriever.retrieve(
+            query=query,
+            top_k=top_k,
+            similarity_threshold=similarity_threshold,
+        )
+        results = [
+            {
+                "chunk": chunk,
+                "combined_score": combined_score,
+                "score_details": score_details,
+                "retrieval_method": "hybrid",
+                "context": [],
+            }
+            for chunk, combined_score, score_details in raw_results
+        ]
 
         return results
 
@@ -260,6 +401,7 @@ class RAGPipeline:
     ) -> List[Dict[str, Any]]:
         """
         Retrieve from persistent storage (ChromaDB).
+        Note: This uses semantic search only, regardless of retrieval mode.
 
         Args:
             query: Query text
@@ -273,8 +415,19 @@ class RAGPipeline:
             logger.warning("Persistent storage not enabled")
             return []
 
+        # Get embedding model
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            embedding_model = self.retriever.model
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            embedding_model = self.hybrid_retriever.embedding_retriever.model
+        else:
+            # For BM25 mode, create temporary embedding model
+            from .retriever import EmbeddingRetriever
+            temp_retriever = EmbeddingRetriever(device=self.device)
+            embedding_model = temp_retriever.model
+
         # Generate query embedding
-        query_embedding = self.retriever.model.encode([query], convert_to_numpy=True)[0].tolist()
+        query_embedding = embedding_model.encode([query], convert_to_numpy=True)[0].tolist()
 
         # Search vector store
         filter_dict = {"source": filter_source} if filter_source else None
@@ -294,6 +447,7 @@ class RAGPipeline:
     ) -> List[tuple]:
         """
         Retrieve chunks with similarity scores.
+        Note: For hybrid mode, returns tuples with score_details dict.
 
         Args:
             query: Query text
@@ -301,9 +455,14 @@ class RAGPipeline:
             similarity_threshold: Minimum similarity score
 
         Returns:
-            List of tuples (chunk_dict, similarity_score)
+            List of tuples (chunk_dict, score) or (chunk_dict, combined_score, score_details)
         """
-        return self.retriever.retrieve(query, top_k, similarity_threshold)
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            return self.retriever.retrieve(query, top_k, similarity_threshold)
+        elif self.retrieval_mode == RetrievalMode.BM25:
+            return self.bm25_retriever.retrieve(query, top_k)
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            return self.hybrid_retriever.retrieve(query, top_k, similarity_threshold)
 
     def get_chunks_by_source(self, source: str) -> List[Dict[str, Any]]:
         """
@@ -324,18 +483,36 @@ class RAGPipeline:
         Returns:
             Dictionary with pipeline statistics
         """
-        return {
+        stats = {
             "chunking_strategy": self.chunking_strategy.value,
+            "retrieval_mode": self.retrieval_mode.value,
             "total_documents": len(self.documents),
             "total_chunks": len(self.processed_chunks),
-            "retriever_stats": self.retriever.get_stats(),
         }
+
+        # Add retriever-specific stats
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            stats["retriever_stats"] = self.retriever.get_stats()
+        elif self.retrieval_mode == RetrievalMode.BM25:
+            stats["bm25_stats"] = self.bm25_retriever.get_stats()
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            stats["hybrid_stats"] = self.hybrid_retriever.get_stats()
+
+        return stats
 
     def clear(self) -> None:
         """Clear all documents and chunks from the pipeline."""
         self.documents = {}
         self.processed_chunks = []
-        self.retriever.clear()
+        
+        # Clear appropriate retriever(s)
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            self.retriever.clear()
+        elif self.retrieval_mode == RetrievalMode.BM25:
+            self.bm25_retriever.clear()
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            self.hybrid_retriever.clear()
+        
         logger.info("RAG pipeline cleared")
 
     def export_chunks(self) -> List[Dict[str, Any]]:
@@ -355,5 +532,13 @@ class RAGPipeline:
             chunks: List of chunk dictionaries
         """
         self.processed_chunks = chunks
-        self.retriever.add_chunks(chunks)
+        
+        # Add to appropriate retriever(s)
+        if self.retrieval_mode == RetrievalMode.SEMANTIC:
+            self.retriever.add_chunks(chunks)
+        elif self.retrieval_mode == RetrievalMode.BM25:
+            self.bm25_retriever.add_chunks(chunks)
+        elif self.retrieval_mode == RetrievalMode.HYBRID:
+            self.hybrid_retriever.add_chunks(chunks)
+        
         logger.info(f"Imported {len(chunks)} chunks")

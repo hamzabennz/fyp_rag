@@ -1,6 +1,6 @@
 # FYP RAG - Retrieval-Augmented Generation with Advanced Chunking
 
-Production-ready RAG system with semantic/layout chunking, persistent storage (ChromaDB + SQLite), and embedding-based retrieval.
+Production-ready RAG system with semantic/layout chunking, persistent storage (ChromaDB + SQLite), and **hybrid retrieval** combining vector embeddings and BM25 keyword search.
 
 ## Features
 
@@ -8,8 +8,25 @@ Production-ready RAG system with semantic/layout chunking, persistent storage (C
 - **Layout Chunking**: Structure-aware chunking with smart heuristics for headers and paragraphs (min: 30 words)
 - **Hybrid Mode**: Combines layout structure + semantic similarity
 - **Persistent Storage**: ChromaDB for vectors, SQLite for document metadata
+- **Hybrid Retrieval**: 🆕 Combines semantic (vector embeddings) + BM25 (keyword search)
+  - **SEMANTIC Mode**: Vector embeddings only (semantic similarity)
+  - **BM25 Mode**: Keyword search only (lexical matching)
+  - **HYBRID Mode**: Combined approach with weighted fusion or RRF
 - **Embedding Retrieval**: `sentence-transformers/all-MiniLM-L6-v2` with cosine similarity
+- **BM25 Search**: Keyword-based retrieval using rank-bm25 algorithm
 - **GPU Support**: CUDA/MPS acceleration
+
+## What's New: Hybrid Retrieval System
+
+This system now supports **three retrieval modes**:
+
+1. **SEMANTIC** (Vector Embeddings) - Best for conceptual understanding
+2. **BM25** (Keyword Search) - Best for exact keyword matches  
+3. **HYBRID** (Combined) - Best overall accuracy
+
+**Note on ChromaDB:** ChromaDB does NOT natively support BM25 or keyword search. We've implemented a separate BM25 retriever that works alongside ChromaDB's vector search for true hybrid retrieval.
+
+📖 **See [HYBRID_RETRIEVAL_GUIDE.md](HYBRID_RETRIEVAL_GUIDE.md) for detailed documentation**
 
 ## Installation
 
