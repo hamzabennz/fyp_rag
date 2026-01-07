@@ -130,10 +130,24 @@ class RAGPipeline:
 
         # Check if document has changed (for persistent storage)
         if self.use_persistent_storage:
-            if self.doc_store.exists(source) and not self.doc_store.has_changed(source, content):
-                logger.info(f"Document '{source}' unchanged, skipping")
+            if self.doc_store.exists(source):
                 doc = self.doc_store.get_document(source)
-                return doc["chunk_count"]
+                content_unchanged = not self.doc_store.has_changed(source, content)
+                
+                # Check if resource_type changed
+                existing_resource_type = doc.get("metadata", {}).get("resource_type", "default")
+                resource_type_unchanged = existing_resource_type == resource_type
+                
+                if content_unchanged and resource_type_unchanged:
+                    logger.info(f"Document '{source}' unchanged, skipping")
+                    return doc["chunk_count"]
+                elif content_unchanged and not resource_type_unchanged:
+                    logger.info(
+                        f"Document '{source}' content unchanged but resource_type changed "
+                        f"({existing_resource_type} -> {resource_type}), re-processing..."
+                    )
+                    # Delete old chunks from old collection
+                    self.vector_store.delete_by_source(source, resource_type=existing_resource_type)
 
         # Store document
         doc_metadata = metadata or {}
