@@ -206,6 +206,8 @@ def stats():
                 "total_chunks": vector_stats['total_chunks'],
                 "db_url": doc_stats['db_url'],
                 "chroma_collection": vector_stats['collection_name'],
+                "collections": vector_stats.get('collections', {}),  # Add this
+                "resource_types": vector_stats.get('resource_types', []),  # Add this
             },
             "documents": [
                 {
