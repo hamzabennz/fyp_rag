@@ -83,6 +83,12 @@ def main():
         help="Show full chunk text in results"
     )
     
+    parser.add_argument(
+        "--resources",
+        nargs="+",
+        help="Resource types to search (e.g., --resources emails sms transactions)"
+    )
+    
     args = parser.parse_args()
     
     # Map strategy
@@ -110,11 +116,14 @@ def main():
     logger.info(f"Top-K: {args.top_k}")
     if args.source:
         logger.info(f"Source filter: {args.source}")
+    if args.resources:
+        logger.info(f"Resource types: {', '.join(args.resources)}")
     
     results = pipeline.retrieve_persistent(
         query=args.query,
         top_k=args.top_k,
         filter_source=args.source,
+        resource_types=args.resources,
     )
     
     # Display results
@@ -140,6 +149,7 @@ def main():
     else:
         for i, result in enumerate(results, 1):
             logger.info(f"\n[{i}] Score: {result['similarity_score']:.4f}")
+            logger.info(f"    Resource: {result.get('resource_type', 'unknown')}")
             logger.info(f"    Source: {result['metadata']['source']}")
             logger.info(f"    Chunk: {result['metadata']['chunk_index'] + 1}/{result['metadata']['total_chunks']}")
             

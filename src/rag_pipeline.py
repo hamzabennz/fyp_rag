@@ -110,6 +110,7 @@ class RAGPipeline:
         content: str,
         source: str,
         metadata: Optional[Dict[str, Any]] = None,
+        resource_type: str = "default",
     ) -> int:
         """
         Add a document to the pipeline for processing.
@@ -118,6 +119,7 @@ class RAGPipeline:
             content: Document content
             source: Document identifier (e.g., filename, URL)
             metadata: Additional metadata about the document
+            resource_type: Type of resource (e.g., 'emails', 'sms', 'transactions')
 
         Returns:
             Number of chunks created
@@ -134,9 +136,12 @@ class RAGPipeline:
                 return doc["chunk_count"]
 
         # Store document
+        doc_metadata = metadata or {}
+        doc_metadata["resource_type"] = resource_type
+        
         self.documents[source] = {
             "content": content,
-            "metadata": metadata or {},
+            "metadata": doc_metadata,
         }
 
         # Chunk document based on strategy

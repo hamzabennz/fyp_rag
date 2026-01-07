@@ -77,6 +77,7 @@ def query():
             "strategy": "semantic",
             "device": "cuda",
             "filter_source": null,
+            "resources": ["emails", "sms"],
             "show_text": false
         }
     }
@@ -103,6 +104,7 @@ def query():
         strategy = payload.get('strategy', 'semantic')
         device = payload.get('device', DEVICE)
         filter_source = payload.get('filter_source', None)
+        resources = payload.get('resources', None)  # e.g., ['emails', 'sms']
         show_text = payload.get('show_text', False)
         
         # Validate parameters
@@ -120,11 +122,12 @@ def query():
         rag_pipeline = get_pipeline(strategy=strategy, device=device)
         
         # Execute query
-        logger.info(f"Processing query: {query_text[:50]}... (top_k={top_k})")
+        logger.info(f"Processing query: {query_text[:50]}... (top_k={top_k}, resources={resources})")
         results = rag_pipeline.retrieve_persistent(
             query=query_text,
             top_k=top_k,
             filter_source=filter_source,
+            resource_types=resources,
         )
         
         # Format response
@@ -136,6 +139,7 @@ def query():
                 "chunk_index": result['metadata']['chunk_index'],
                 "total_chunks": result['metadata']['total_chunks'],
                 "similarity_score": result['similarity_score'],
+                "resource_type": result.get('resource_type', 'unknown'),
             }
             
             if show_text:

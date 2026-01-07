@@ -79,6 +79,12 @@ def main():
         help="Additional metadata as JSON string"
     )
     
+    parser.add_argument(
+        "--resource-type",
+        default="default",
+        help="Resource type for collection (e.g., 'emails', 'sms', 'transactions')"
+    )
+    
     args = parser.parse_args()
     
     # Get document content
@@ -133,17 +139,20 @@ def main():
     # Ingest document
     logger.info(f"Ingesting document: {args.source}")
     logger.info(f"Content length: {len(content)} characters")
+    logger.info(f"Resource type: {args.resource_type}")
     
     num_chunks = pipeline.add_document(
         content=content,
         source=args.source,
         metadata=metadata,
+        resource_type=args.resource_type,
     )
     
     logger.info("=" * 60)
     logger.info(f"✓ Successfully ingested document: {args.source}")
     logger.info(f"  Chunks created: {num_chunks}")
     logger.info(f"  Strategy: {args.strategy}")
+    logger.info(f"  Resource type: {args.resource_type}")
     logger.info("=" * 60)
     
     # Show stats
