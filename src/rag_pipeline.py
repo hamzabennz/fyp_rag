@@ -156,18 +156,21 @@ class RAGPipeline:
             # Get embeddings from retriever
             embeddings = self.retriever.chunk_embeddings[-len(chunks):]
             
-            # Store in vector DB
-            self.vector_store.add_chunks(chunks, embeddings)
+            # Store in vector DB with resource_type
+            self.vector_store.add_chunks(chunks, embeddings, resource_type=resource_type)
             
             # Store metadata in doc DB
             self.doc_store.add_document(
                 source=source,
                 content=content,
                 chunk_count=len(chunks),
-                metadata=metadata,
+                metadata=doc_metadata,
             )
 
-        logger.info(f"Added document '{source}' with {len(chunks)} chunks")
+            logger.info(f"Added document '{source}' with {len(chunks)} chunks to collection '{resource_type}'")
+        else:
+            logger.info(f"Added document '{source}' with {len(chunks)} chunks (in-memory only)")
+        
         return len(chunks)
 
     def _chunk_document(self, content: str, source: str) -> List[Dict[str, Any]]:
@@ -257,14 +260,18 @@ class RAGPipeline:
         query: str,
         top_k: int = 5,
         filter_source: str = None,
+        resource_types: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Retrieve from persistent storage (ChromaDB).
+        Can search across specific resource types or all resources.
 
         Args:
             query: Query text
             top_k: Number of results
             filter_source: Optional source filter
+            resource_types: List of resource types to search (e.g., ['emails', 'sms']).
+                          If None, searches all available collections.
 
         Returns:
             List of result dictionaries
@@ -282,6 +289,7 @@ class RAGPipeline:
             query_embedding=query_embedding,
             top_k=top_k,
             filter_dict=filter_dict,
+            resource_types=resource_types,
         )
 
         return results
