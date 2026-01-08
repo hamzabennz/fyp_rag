@@ -280,13 +280,13 @@ def documents():
         }), 500
 
 
-@app.route('/document/<source_id>', methods=['GET'])
+@app.route('/document/<path:source_id>', methods=['GET'])
 def get_document(source_id):
     """
     Get full content of a document by source ID.
     
     Args:
-        source_id: Document source identifier (from query results)
+        source_id: Document source identifier (from query results, can include slashes)
     """
     try:
         rag_pipeline = get_pipeline()
