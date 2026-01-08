@@ -227,6 +227,172 @@ def stats():
         }), 500
 
 
+@app.route('/documents', methods=['GET'])
+def documents():
+    """
+    Get list of all documents with metadata.
+    
+    Optional query parameters:
+    - resource_type: Filter by resource type (e.g., "emails")
+    """
+    try:
+        rag_pipeline = get_pipeline()
+        resource_type = request.args.get('resource_type', None)
+        
+        # Get all documents
+        all_documents = rag_pipeline.doc_store.list_documents()
+        
+        # Filter by resource type if specified
+        if resource_type:
+            filtered_docs = []
+            for doc in all_documents:
+                doc_resource_type = doc.get('metadata', {}).get('resource_type', 'default')
+                if doc_resource_type == resource_type:
+                    filtered_docs.append(doc)
+            documents_list = filtered_docs
+        else:
+            documents_list = all_documents
+        
+        # Format response
+        formatted_docs = [
+            {
+                "id": doc['id'],
+                "source": doc['source'],
+                "chunk_count": doc['chunk_count'],
+                "resource_type": doc.get('metadata', {}).get('resource_type', 'default'),
+                "created_at": doc['created_at'],
+                "updated_at": doc['updated_at'],
+            }
+            for doc in documents_list
+        ]
+        
+        return jsonify({
+            "success": True,
+            "count": len(formatted_docs),
+            "documents": formatted_docs
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving documents: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/document/<path:source_id>', methods=['GET'])
+def get_document(source_id):
+    """
+    Get full content of a document by source ID.
+    
+    Args:
+        source_id: Document source identifier (from query results, can include slashes)
+    """
+    try:
+        rag_pipeline = get_pipeline()
+        
+        # Get document metadata
+        doc = rag_pipeline.doc_store.get_document(source_id)
+        
+        if not doc:
+            return jsonify({
+                "success": False,
+                "error": f"Document not found: {source_id}"
+            }), 404
+        
+        # Get all chunks for this source from vector store
+        chunks = rag_pipeline.vector_store.get_chunks_by_source(source_id)
+        
+        # Sort by chunk index and reconstruct full content
+        sorted_chunks = sorted(chunks, key=lambda x: x.get('metadata', {}).get('chunk_index', 0))
+        full_content = "\n\n---\n\n".join([chunk['text'] for chunk in sorted_chunks])
+        
+        return jsonify({
+            "success": True,
+            "source": source_id,
+            "metadata": doc.get('metadata', {}),
+            "chunk_count": doc['chunk_count'],
+            "created_at": doc['created_at'],
+            "chunks": [
+                {
+                    "index": chunk.get('metadata', {}).get('chunk_index', 0),
+                    "total": chunk.get('metadata', {}).get('total_chunks', 0),
+                    "text": chunk['text'],
+                    "word_count": chunk.get('metadata', {}).get('word_count', 0),
+                }
+                for chunk in sorted_chunks
+            ],
+            "full_content": full_content
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving document: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
+@app.route('/collection/<resource_type>', methods=['GET'])
+def get_collection(resource_type):
+    """
+    Get all documents in a specific collection (resource type).
+    
+    Args:
+        resource_type: Resource type (e.g., "emails", "sms")
+    """
+    try:
+        rag_pipeline = get_pipeline()
+        
+        # Get all documents and filter by resource type
+        all_documents = rag_pipeline.doc_store.list_documents()
+        
+        collection_docs = [
+            doc for doc in all_documents
+            if doc.get('metadata', {}).get('resource_type', 'default') == resource_type
+        ]
+        
+        if not collection_docs:
+            return jsonify({
+                "success": True,
+                "resource_type": resource_type,
+                "count": 0,
+                "documents": [],
+                "message": f"No documents found in collection '{resource_type}'"
+            }), 200
+        
+        # Format response
+        formatted_docs = [
+            {
+                "id": doc['id'],
+                "source": doc['source'],
+                "chunk_count": doc['chunk_count'],
+                "created_at": doc['created_at'],
+                "updated_at": doc['updated_at'],
+            }
+            for doc in collection_docs
+        ]
+        
+        # Get total chunks in this collection
+        vector_stats = rag_pipeline.vector_store.get_stats()
+        collection_chunk_count = vector_stats.get('collections', {}).get(resource_type, 0)
+        
+        return jsonify({
+            "success": True,
+            "resource_type": resource_type,
+            "document_count": len(formatted_docs),
+            "chunk_count": collection_chunk_count,
+            "documents": formatted_docs
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error retrieving collection: {str(e)}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+
 if __name__ == '__main__':
     import argparse
     

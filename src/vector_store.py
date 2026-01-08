@@ -263,6 +263,37 @@ class ChromaVectorStore:
         logger.info(f"Retrieved {len(formatted_results)} results from vector store")
         return formatted_results
 
+    def get_chunks_by_source(self, source: str) -> List[Dict[str, Any]]:
+        """
+        Get all chunks from a specific source across all collections.
+
+        Args:
+            source: Source identifier
+
+        Returns:
+            List of chunk dictionaries with text and metadata
+        """
+        all_chunks = []
+        resource_types = self.list_collections()
+        
+        for resource_type in resource_types:
+            collection = self._get_collection(resource_type)
+            
+            # Query chunks by source
+            results = collection.get(where={"source": source})
+            
+            if results and results["ids"]:
+                for i, chunk_id in enumerate(results["ids"]):
+                    chunk_data = {
+                        "chunk_id": chunk_id,
+                        "text": results["documents"][i],
+                        "metadata": results["metadatas"][i] if results["metadatas"] else {},
+                    }
+                    all_chunks.append(chunk_data)
+        
+        logger.info(f"Retrieved {len(all_chunks)} chunks from source '{source}'")
+        return all_chunks
+
     def delete_by_source(self, source: str, resource_type: str = "default") -> None:
         """
         Delete all chunks from a specific source.
