@@ -40,6 +40,13 @@ RETRIEVAL_CONFIG = {
     "similarity_threshold": 0.0,  # No threshold by default
     "include_context": False,
     "context_window": 1,
+    "retrieval_mode": "embedding",  # 'embedding', 'bm25', or 'hybrid'
+}
+
+# BM25 Configuration
+BM25_CONFIG = {
+    "k1": 1.5,  # Term frequency saturation
+    "b": 0.75,  # Document length normalization
 }
 
 # Pipeline Configuration
@@ -68,6 +75,11 @@ class RAGConfig:
     # Retrieval
     retrieval_top_k: int = 5
     retrieval_threshold: Optional[float] = None
+    retrieval_mode: str = "embedding"  # 'embedding', 'bm25', or 'hybrid'
+
+    # BM25
+    bm25_k1: float = 1.5
+    bm25_b: float = 0.75
 
     # Device
     device: str = "cpu"
@@ -92,6 +104,9 @@ class RAGConfig:
             "layout_min_words": self.layout_min_words,
             "embedding_model": self.embedding_model,
             "retrieval_top_k": self.retrieval_top_k,
+            "retrieval_mode": self.retrieval_mode,
+            "bm25_k1": self.bm25_k1,
+            "bm25_b": self.bm25_b,
             "device": self.device,
         }
 

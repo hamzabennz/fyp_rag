@@ -86,7 +86,8 @@ def query():
             "device": "cuda",
             "filter_source": null,
             "resources": ["emails", "sms"],
-            "show_text": false
+            "show_text": false,
+            "retrieval_mode": "embedding"
         }
     }
     """
@@ -114,6 +115,7 @@ def query():
         filter_source = payload.get('filter_source', None)
         resources = payload.get('resources', None)  # e.g., ['emails', 'sms']
         show_text = payload.get('show_text', False)
+        retrieval_mode = payload.get('retrieval_mode', 'embedding')  # 'embedding', 'bm25', 'hybrid'
         
         # Validate parameters
         if strategy not in ['semantic', 'layout', 'hybrid']:
@@ -126,16 +128,22 @@ def query():
                 "error": f"Invalid top_k: {top_k}. Must be a positive integer"
             }), 400
         
+        if retrieval_mode not in ['embedding', 'bm25', 'hybrid']:
+            return jsonify({
+                "error": f"Invalid retrieval_mode: {retrieval_mode}. Must be 'embedding', 'bm25', or 'hybrid'"
+            }), 400
+        
         # Get pipeline
         rag_pipeline = get_pipeline(strategy=strategy, device=device)
         
         # Execute query
-        logger.info(f"Processing query: {query_text[:50]}... (top_k={top_k}, resources={resources})")
+        logger.info(f"Processing query: {query_text[:50]}... (top_k={top_k}, resources={resources}, retrieval_mode={retrieval_mode})")
         results = rag_pipeline.retrieve_persistent(
             query=query_text,
             top_k=top_k,
             filter_source=filter_source,
             resource_types=resources,
+            retrieval_mode=retrieval_mode,
         )
         
         # Format response
@@ -148,7 +156,13 @@ def query():
                 "total_chunks": result['metadata']['total_chunks'],
                 "similarity_score": result['similarity_score'],
                 "resource_type": result.get('resource_type', 'unknown'),
+                "retrieval_method": result.get('retrieval_method', retrieval_mode),
             }
+            
+            # Add scores for hybrid mode
+            if retrieval_mode == 'hybrid':
+                result_data['embedding_score'] = result.get('embedding_score', 0.0)
+                result_data['bm25_score'] = result.get('bm25_score', 0.0)
             
             if show_text:
                 result_data['text'] = result['text']

@@ -12,6 +12,7 @@ import logging
 from .semantic_chunker import SemanticChunker
 from .layout_chunker import LayoutChunker
 from .retriever import EmbeddingRetriever
+from .bm25_retriever import BM25Retriever
 from .vector_store import ChromaVectorStore
 from .doc_store import SQLiteDocStore
 
@@ -80,8 +81,9 @@ class RAGPipeline:
         else:
             self.layout_chunker = None
 
-        # Initialize retriever
+        # Initialize retrievers
         self.retriever = EmbeddingRetriever(model_name=embedding_model, device=device)
+        self.bm25_retriever = BM25Retriever()
 
         # Initialize persistent storage (optional)
         self.use_persistent_storage = use_persistent_storage
@@ -161,8 +163,9 @@ class RAGPipeline:
         # Chunk document based on strategy
         chunks = self._chunk_document(content, source)
 
-        # Add chunks to retriever (in-memory)
+        # Add chunks to retrievers (in-memory)
         self.retriever.add_chunks(chunks)
+        self.bm25_retriever.add_chunks(chunks)
         self.processed_chunks.extend(chunks)
 
         # Add to persistent storage if enabled
@@ -220,6 +223,193 @@ class RAGPipeline:
 
         return chunks
 
+    def _hybrid_rerank(
+        self,
+        embedding_results: List[tuple],
+        bm25_results: List[tuple],
+        top_k: int,
+        similarity_threshold: float = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Combine and re-rank results from embedding and BM25 using Reciprocal Rank Fusion.
+
+        Args:
+            embedding_results: Results from embedding retriever (chunk, score)
+            bm25_results: Results from BM25 retriever (chunk, score)
+            top_k: Number of results to return
+            similarity_threshold: Optional threshold for filtering
+
+        Returns:
+            Combined and re-ranked results
+        """
+        # Build RRF scores
+        rrf_k = 60  # Standard RRF constant
+        chunk_scores = {}  # chunk_id -> {chunk, embedding_score, bm25_score, rrf_score}
+        
+        # Process embedding results
+        for rank, (chunk, score) in enumerate(embedding_results, 1):
+            chunk_id = chunk.get("chunk_id", id(chunk))
+            if chunk_id not in chunk_scores:
+                chunk_scores[chunk_id] = {
+                    "chunk": chunk,
+                    "embedding_score": 0.0,
+                    "bm25_score": 0.0,
+                    "rrf_score": 0.0,
+                }
+            chunk_scores[chunk_id]["embedding_score"] = score
+            chunk_scores[chunk_id]["rrf_score"] += 1.0 / (rrf_k + rank)
+        
+        # Process BM25 results
+        for rank, (chunk, score) in enumerate(bm25_results, 1):
+            chunk_id = chunk.get("chunk_id", id(chunk))
+            if chunk_id not in chunk_scores:
+                chunk_scores[chunk_id] = {
+                    "chunk": chunk,
+                    "embedding_score": 0.0,
+                    "bm25_score": 0.0,
+                    "rrf_score": 0.0,
+                }
+            chunk_scores[chunk_id]["bm25_score"] = score
+            chunk_scores[chunk_id]["rrf_score"] += 1.0 / (rrf_k + rank)
+        
+        # Sort by RRF score
+        sorted_chunks = sorted(
+            chunk_scores.values(),
+            key=lambda x: x["rrf_score"],
+            reverse=True
+        )
+        
+        # Apply threshold if specified (using max of embedding and BM25 scores)
+        if similarity_threshold is not None:
+            sorted_chunks = [
+                c for c in sorted_chunks
+                if max(c["embedding_score"], c["bm25_score"]) >= similarity_threshold
+            ]
+        
+        # Take top-k
+        sorted_chunks = sorted_chunks[:top_k]
+        
+        # Format results
+        results = []
+        for item in sorted_chunks:
+            results.append({
+                "chunk": item["chunk"],
+                "similarity_score": item["rrf_score"],
+                "embedding_score": item["embedding_score"],
+                "bm25_score": item["bm25_score"],
+                "context": [],
+                "retrieval_method": "hybrid",
+            })
+        
+        logger.info(f"Hybrid retrieval: combined {len(embedding_results)} embedding + {len(bm25_results)} BM25 results -> {len(results)} final results")
+        return results
+
+    def _filter_chunks_by_resources(
+        self,
+        chunks: List[Dict[str, Any]],
+        resource_types: Optional[List[str]] = None,
+        filter_source: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter chunks by resource types and/or source.
+
+        Args:
+            chunks: List of chunks to filter
+            resource_types: List of resource types to include
+            filter_source: Optional source filter
+
+        Returns:
+            Filtered chunks
+        """
+        filtered = chunks
+        
+        if resource_types:
+            filtered = [
+                c for c in filtered
+                if c.get("metadata", {}).get("resource_type", "default") in resource_types
+            ]
+        
+        if filter_source:
+            filtered = [
+                c for c in filtered
+                if c.get("source") == filter_source
+            ]
+        
+        return filtered
+
+    def _hybrid_rerank_persistent(
+        self,
+        embedding_results: List[Dict[str, Any]],
+        bm25_results: List[tuple],
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Combine and re-rank results from embedding (persistent) and BM25 using RRF.
+
+        Args:
+            embedding_results: Results from vector store (dicts)
+            bm25_results: Results from BM25 retriever (chunk, score tuples)
+            top_k: Number of results to return
+
+        Returns:
+            Combined and re-ranked results
+        """
+        rrf_k = 60
+        chunk_scores = {}
+        
+        # Process embedding results (from ChromaDB)
+        for rank, result in enumerate(embedding_results, 1):
+            chunk_id = result.get("chunk_id", "")
+            if chunk_id not in chunk_scores:
+                chunk_scores[chunk_id] = {
+                    "result": result,
+                    "embedding_score": 0.0,
+                    "bm25_score": 0.0,
+                    "rrf_score": 0.0,
+                }
+            chunk_scores[chunk_id]["embedding_score"] = result.get("similarity_score", 0.0)
+            chunk_scores[chunk_id]["rrf_score"] += 1.0 / (rrf_k + rank)
+        
+        # Process BM25 results
+        for rank, (chunk, score) in enumerate(bm25_results, 1):
+            chunk_id = chunk.get("chunk_id", "")
+            if chunk_id not in chunk_scores:
+                # Create result dict for BM25-only result
+                chunk_scores[chunk_id] = {
+                    "result": {
+                        "chunk_id": chunk_id,
+                        "text": chunk.get("text", ""),
+                        "metadata": chunk,
+                        "similarity_score": 0.0,
+                        "resource_type": chunk.get("metadata", {}).get("resource_type", "default"),
+                    },
+                    "embedding_score": 0.0,
+                    "bm25_score": 0.0,
+                    "rrf_score": 0.0,
+                }
+            chunk_scores[chunk_id]["bm25_score"] = score
+            chunk_scores[chunk_id]["rrf_score"] += 1.0 / (rrf_k + rank)
+        
+        # Sort by RRF score
+        sorted_chunks = sorted(
+            chunk_scores.values(),
+            key=lambda x: x["rrf_score"],
+            reverse=True
+        )[:top_k]
+        
+        # Format results
+        results = []
+        for item in sorted_chunks:
+            result = item["result"].copy()
+            result["similarity_score"] = item["rrf_score"]
+            result["embedding_score"] = item["embedding_score"]
+            result["bm25_score"] = item["bm25_score"]
+            result["retrieval_method"] = "hybrid"
+            results.append(result)
+        
+        logger.info(f"Hybrid persistent retrieval: {len(results)} results")
+        return results
+
     def retrieve(
         self,
         query: str,
@@ -227,6 +417,7 @@ class RAGPipeline:
         similarity_threshold: float = None,
         include_context: bool = False,
         context_window: int = 1,
+        retrieval_mode: str = "embedding",
     ) -> List[Dict[str, Any]]:
         """
         Retrieve relevant chunks for a query.
@@ -237,6 +428,7 @@ class RAGPipeline:
             similarity_threshold: Minimum similarity score (0-1)
             include_context: Whether to include adjacent chunks as context
             context_window: Number of adjacent chunks to include
+            retrieval_mode: Retrieval mode ('embedding', 'bm25', or 'hybrid')
 
         Returns:
             List of result dictionaries with chunks and scores
@@ -245,27 +437,64 @@ class RAGPipeline:
             logger.warning("No documents have been added to the pipeline")
             return []
 
-        if include_context:
-            results = self.retriever.retrieve_with_context(
+        # Choose retrieval method based on mode
+        if retrieval_mode == "bm25":
+            raw_results = self.bm25_retriever.retrieve(
                 query=query,
                 top_k=top_k,
-                similarity_threshold=similarity_threshold,
-                context_window=context_window,
-            )
-        else:
-            raw_results = self.retriever.retrieve(
-                query=query,
-                top_k=top_k,
-                similarity_threshold=similarity_threshold,
+                score_threshold=similarity_threshold,
             )
             results = [
                 {
                     "chunk": chunk,
                     "similarity_score": score,
                     "context": [],
+                    "retrieval_method": "bm25",
                 }
                 for chunk, score in raw_results
             ]
+        elif retrieval_mode == "hybrid":
+            # Get results from both methods
+            embedding_results = self.retriever.retrieve(
+                query=query,
+                top_k=top_k * 2,  # Get more candidates
+                similarity_threshold=None,
+            )
+            bm25_results = self.bm25_retriever.retrieve(
+                query=query,
+                top_k=top_k * 2,  # Get more candidates
+                score_threshold=None,
+            )
+            
+            # Combine and re-rank using RRF (Reciprocal Rank Fusion)
+            results = self._hybrid_rerank(
+                embedding_results, bm25_results, top_k, similarity_threshold
+            )
+        else:  # embedding mode (default)
+            if include_context:
+                results = self.retriever.retrieve_with_context(
+                    query=query,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                    context_window=context_window,
+                )
+                for r in results:
+                    r["retrieval_method"] = "embedding"
+            else:
+                raw_results = self.retriever.retrieve(
+                    query=query,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                )
+                results = [
+                    {
+                        "chunk": chunk,
+                        "similarity_score": score,
+                        "context": [],
+                        "retrieval_method": "embedding",
+                    }
+                    for chunk, score in raw_results
+                ]
 
         return results
 
@@ -275,6 +504,7 @@ class RAGPipeline:
         top_k: int = 5,
         filter_source: str = None,
         resource_types: Optional[List[str]] = None,
+        retrieval_mode: str = "embedding",
     ) -> List[Dict[str, Any]]:
         """
         Retrieve from persistent storage (ChromaDB).
@@ -286,25 +516,83 @@ class RAGPipeline:
             filter_source: Optional source filter
             resource_types: List of resource types to search (e.g., ['emails', 'sms']).
                           If None, searches all available collections.
+            retrieval_mode: Retrieval mode ('embedding', 'bm25', or 'hybrid')
 
         Returns:
             List of result dictionaries
         """
         if not self.use_persistent_storage:
             logger.warning("Persistent storage not enabled")
+        if not self.use_persistent_storage:
+            logger.warning("Persistent storage not enabled")
             return []
 
-        # Generate query embedding
-        query_embedding = self.retriever.model.encode([query], convert_to_numpy=True)[0].tolist()
-
-        # Search vector store
-        filter_dict = {"source": filter_source} if filter_source else None
-        results = self.vector_store.search(
-            query_embedding=query_embedding,
-            top_k=top_k,
-            filter_dict=filter_dict,
-            resource_types=resource_types,
-        )
+        if retrieval_mode == "embedding":
+            # Standard embedding-based retrieval from vector store
+            query_embedding = self.retriever.model.encode([query], convert_to_numpy=True)[0].tolist()
+            filter_dict = {"source": filter_source} if filter_source else None
+            results = self.vector_store.search(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                filter_dict=filter_dict,
+                resource_types=resource_types,
+            )
+            # Add retrieval method to results
+            for r in results:
+                r["retrieval_method"] = "embedding"
+            
+        elif retrieval_mode == "bm25":
+            # BM25 retrieval: use in-memory BM25 index
+            # Filter chunks by resource types if specified
+            filtered_chunks = self._filter_chunks_by_resources(
+                self.processed_chunks, resource_types, filter_source
+            )
+            
+            # Temporarily create BM25 retriever with filtered chunks
+            temp_bm25 = BM25Retriever()
+            temp_bm25.add_chunks(filtered_chunks)
+            
+            raw_results = temp_bm25.retrieve(query=query, top_k=top_k)
+            
+            # Format to match vector store results
+            results = []
+            for chunk, score in raw_results:
+                results.append({
+                    "chunk_id": chunk.get("chunk_id", ""),
+                    "text": chunk.get("text", ""),
+                    "metadata": chunk,
+                    "similarity_score": score,
+                    "resource_type": chunk.get("metadata", {}).get("resource_type", "default"),
+                    "retrieval_method": "bm25",
+                })
+            
+        elif retrieval_mode == "hybrid":
+            # Hybrid: combine embedding and BM25
+            # Get embedding results
+            query_embedding = self.retriever.model.encode([query], convert_to_numpy=True)[0].tolist()
+            filter_dict = {"source": filter_source} if filter_source else None
+            embedding_results = self.vector_store.search(
+                query_embedding=query_embedding,
+                top_k=top_k * 2,  # Get more candidates
+                filter_dict=filter_dict,
+                resource_types=resource_types,
+            )
+            
+            # Get BM25 results
+            filtered_chunks = self._filter_chunks_by_resources(
+                self.processed_chunks, resource_types, filter_source
+            )
+            temp_bm25 = BM25Retriever()
+            temp_bm25.add_chunks(filtered_chunks)
+            bm25_raw = temp_bm25.retrieve(query=query, top_k=top_k * 2)
+            
+            # Re-rank using RRF
+            results = self._hybrid_rerank_persistent(
+                embedding_results, bm25_raw, top_k
+            )
+        else:
+            logger.error(f"Invalid retrieval_mode: {retrieval_mode}")
+            return []
 
         return results
 
@@ -358,6 +646,7 @@ class RAGPipeline:
         self.documents = {}
         self.processed_chunks = []
         self.retriever.clear()
+        self.bm25_retriever.clear()
         logger.info("RAG pipeline cleared")
 
     def export_chunks(self) -> List[Dict[str, Any]]:

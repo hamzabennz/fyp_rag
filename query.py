@@ -89,6 +89,13 @@ def main():
         help="Resource types to search (e.g., --resources emails sms transactions)"
     )
     
+    parser.add_argument(
+        "--retrieval-mode",
+        choices=["embedding", "bm25", "hybrid"],
+        default="embedding",
+        help="Retrieval mode: embedding (semantic), bm25 (keyword), or hybrid (default: embedding)"
+    )
+    
     args = parser.parse_args()
     
     # Map strategy
@@ -114,6 +121,7 @@ def main():
     # Query
     logger.info(f"\nQuerying: {args.query}")
     logger.info(f"Top-K: {args.top_k}")
+    logger.info(f"Retrieval mode: {args.retrieval_mode}")
     if args.source:
         logger.info(f"Source filter: {args.source}")
     if args.resources:
@@ -124,6 +132,7 @@ def main():
         top_k=args.top_k,
         filter_source=args.source,
         resource_types=args.resources,
+        retrieval_mode=args.retrieval_mode,
     )
     
     # Display results
@@ -149,6 +158,13 @@ def main():
     else:
         for i, result in enumerate(results, 1):
             logger.info(f"\n[{i}] Score: {result['similarity_score']:.4f}")
+            logger.info(f"    Method: {result.get('retrieval_method', args.retrieval_mode)}")
+            
+            # Show individual scores for hybrid mode
+            if args.retrieval_mode == 'hybrid':
+                logger.info(f"    Embedding: {result.get('embedding_score', 0.0):.4f}")
+                logger.info(f"    BM25: {result.get('bm25_score', 0.0):.4f}")
+            
             logger.info(f"    Resource: {result.get('resource_type', 'unknown')}")
             logger.info(f"    Source: {result['metadata']['source']}")
             logger.info(f"    Chunk: {result['metadata']['chunk_index'] + 1}/{result['metadata']['total_chunks']}")
