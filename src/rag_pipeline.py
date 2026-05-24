@@ -642,11 +642,17 @@ class RAGPipeline:
         }
 
     def clear(self) -> None:
-        """Clear all documents and chunks from the pipeline."""
+        """Clear all documents and chunks from the pipeline (in-memory + persistent)."""
         self.documents = {}
         self.processed_chunks = []
         self.retriever.clear()
         self.bm25_retriever.clear()
+        if self.vector_store is not None:
+            self.vector_store.clear()
+            logger.info("ChromaDB collections cleared")
+        if self.doc_store is not None:
+            self.doc_store.clear()
+            logger.info("SQLite document store cleared")
         logger.info("RAG pipeline cleared")
 
     def export_chunks(self) -> List[Dict[str, Any]]:
