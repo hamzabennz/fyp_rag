@@ -17,6 +17,11 @@ import sys
 from pathlib import Path
 from typing import List, Dict, Any
 
+# Add src to path for direct pipeline import
+sys.path.insert(0, str(Path(__file__).parent))
+from src.rag_pipeline import RAGPipeline, ChunkingStrategy
+from config import CHROMA_PERSIST_DIR, DOC_DB_URL
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -206,6 +211,13 @@ def main():
         help="Which batch numbers to ingest (default: 1-5)",
     )
 
+    parser.add_argument(
+        "--clear-db",
+        action="store_true",
+        default=False,
+        help="Clear all existing data from ChromaDB and SQLite before ingesting (default: False)",
+    )
+
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -221,7 +233,25 @@ def main():
     logger.info(f"Device: {args.device}")
     logger.info(f"Batch Types: {args.batch_types}")
     logger.info(f"Batch Numbers: {args.batch_nums}")
+    logger.info(f"Clear DB: {args.clear_db}")
     logger.info("=" * 80)
+
+    if args.clear_db:
+        logger.info("Clearing existing database before ingestion...")
+        strategy_map = {
+            "semantic": ChunkingStrategy.SEMANTIC,
+            "layout": ChunkingStrategy.LAYOUT,
+            "hybrid": ChunkingStrategy.HYBRID,
+        }
+        _pipeline = RAGPipeline(
+            chunking_strategy=strategy_map.get(args.strategy, ChunkingStrategy.SEMANTIC),
+            device=args.device,
+            use_persistent_storage=True,
+            chroma_persist_dir=CHROMA_PERSIST_DIR,
+            sqlite_db_url=DOC_DB_URL,
+        )
+        _pipeline.clear()
+        logger.info("✓ Database cleared successfully")
 
     total_ingested = 0
 
