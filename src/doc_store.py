@@ -77,7 +77,8 @@ class SQLiteDocStore:
             Document ID
         """
         checksum = self._calculate_checksum(content)
-        doc_id = f"doc_{checksum[:12]}"
+        # Use source hash for doc_id to ensure uniqueness per document
+        doc_id = f"doc_{hashlib.md5(source.encode()).hexdigest()[:12]}"
         
         # Check if document exists
         existing = self.session.query(Document).filter_by(source=source).first()
@@ -88,7 +89,11 @@ class SQLiteDocStore:
             existing.chunk_count = chunk_count
             existing.doc_metadata = json.dumps(metadata or {})
             existing.updated_at = datetime.utcnow()
-            self.session.commit()
+            try:
+                self.session.commit()
+            except Exception:
+                self.session.rollback()
+                raise
             logger.info(f"Updated document: {source}")
             return existing.id
         else:
@@ -101,7 +106,11 @@ class SQLiteDocStore:
                 doc_metadata=json.dumps(metadata or {}),
             )
             self.session.add(doc)
-            self.session.commit()
+            try:
+                self.session.commit()
+            except Exception:
+                self.session.rollback()
+                raise
             logger.info(f"Added document: {source} (id={doc_id})")
             return doc_id
 
